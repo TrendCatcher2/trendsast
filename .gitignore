@@ -3,6 +3,7 @@
 /*
 !/.gitignore
 !/README.md
+!/LICENSE
 !/trendsast.py
 !/install.sh
 !/export_for_chat.py

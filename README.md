@@ -116,3 +116,7 @@ To add your own rule, drop a `.yaml` file into `rules/`. Semgrep loads the whole
 - Static analysis can't see runtime configuration, WAFs, or global middleware. That's why the endpoint map says "verify".
 - The custom Java rules expect normal imports. Fully-qualified names like `new java.io.File(...)` without an import may be missed, and CodeQL covers this case.
 - Business-logic bugs (race conditions, payment flows, multi-step authorization) need manual testing. Use the endpoint map as your checklist.
+
+## License
+
+MIT. See [LICENSE](LICENSE). Use it only on code you are authorized to test.
