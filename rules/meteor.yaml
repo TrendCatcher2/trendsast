@@ -1,0 +1,67 @@
+rules:
+- id: ts-meteor-ddp-nosqli
+  languages: [typescript, javascript]
+  severity: WARNING
+  message: DDP method argument reaches a database model call without check(). A DDP client can send an object instead of a string (e.g. {"$ne":null} or {"$regex":".*"}) -> NoSQL operator injection / authorization bypass. Compare with the REST twin in server/api.
+  metadata: {cwe: "CWE-943", category: nosqli, confidence: MEDIUM}
+  mode: taint
+  pattern-sources:
+    - patterns:
+      - pattern-inside: |
+          Meteor.methods<$T>({...})
+      - pattern-either:
+        - pattern: |
+            async function $M(..., $P, ...) { ... }
+        - pattern: |
+            function $M(..., $P, ...) { ... }
+      - focus-metavariable: $P
+  pattern-sanitizers:
+    - by-side-effect: true
+      patterns:
+        - pattern: check($X, ...)
+        - focus-metavariable: $X
+    - patterns:
+      - pattern-either:
+        - pattern-inside: |
+            if (<... typeof $X ...>) { ... }
+            ...
+        - pattern-inside: |
+            if (<... $Z.isValid($X) ...>) { ... }
+            ...
+        - pattern-inside: |
+            if (<... Match.test($X, ...) ...>) { ... }
+            ...
+      - pattern: $X
+    - patterns:
+      - pattern-either:
+        - pattern-inside: |
+            check($X?.$F, ...);
+            ...
+        - pattern-inside: |
+            check($X.$F, ...);
+            ...
+      - pattern: $X.$F
+    - pattern: String($X)
+    - pattern: Number($X)
+    - pattern: parseInt($X, ...)
+    - patterns:
+      - pattern-either:
+        - pattern-inside: |
+            const $V = await $MODEL.$FN(...);
+            ...
+        - pattern-inside: |
+            let $V = await $MODEL.$FN(...);
+            ...
+        - pattern-inside: |
+            $V = await $MODEL.$FN(...);
+            ...
+      - pattern: $V
+  pattern-sinks:
+    - patterns:
+      - pattern: $MODEL.$FN(...)
+      - metavariable-regex:
+          metavariable: $MODEL
+          regex: ^(Rooms|Messages|Users|Subscriptions|Uploads|Integrations|Roles|Permissions|Settings|Avatars|Team|TeamMember|Livechat\w*|Omnichannel\w*|Message\w*|Room\w*|User\w*|Read\w*|Federation\w*|Invites|Imports|EmailInbox|CustomSounds|CustomUserStatus|EmojiCustom|OAuthApps|Sessions|Nps\w*|Banners\w*)$
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^(find|count|update|delete|remove|aggregate|insert|upsert|set|unset|increment|add|pull|push).*

@@ -1,0 +1,569 @@
+rules:
+# ================================================================ GO
+- id: ts-go-sqli
+  languages: [go]
+  severity: ERROR
+  message: User input formatted/concatenated into SQL (SQL injection).
+  metadata: {cwe: "CWE-89", category: sqli, confidence: HIGH}
+  mode: taint
+  pattern-sources: &gosrc
+    - pattern: '($R : *http.Request).URL.Query().Get(...)'
+    - pattern: '($R : *http.Request).FormValue(...)'
+    - pattern: '($R : *http.Request).PostFormValue(...)'
+    - pattern: '($R : *http.Request).Header.Get(...)'
+    - pattern: '($R : *http.Request).Cookie(...)'
+    - pattern: '($R : *http.Request).URL.Path'
+    - pattern: '($R : *http.Request).Body'
+    - pattern: $R.URL.Query().Get(...)
+    - pattern: $R.FormValue(...)
+    - pattern: mux.Vars(...)
+    - pattern: chi.URLParam(...)
+    - pattern: '($C : *gin.Context).Query(...)'
+    - pattern: '($C : *gin.Context).Param(...)'
+    - pattern: '($C : *gin.Context).PostForm(...)'
+    - pattern: '($C : *gin.Context).GetHeader(...)'
+    - pattern: $C.Query(...)
+    - pattern: $C.Param(...)
+    - pattern: $C.PostForm(...)
+    - pattern: $C.QueryParam(...)
+    - pattern: $C.FormValue(...)
+    - pattern: $C.Params(...)
+    - pattern: os.Args
+  pattern-sanitizers:
+    - pattern: strconv.Atoi(...)
+    - pattern: strconv.ParseInt(...)
+  pattern-sinks:
+    - pattern: $DB.Query($Q, ...)
+    - pattern: $DB.QueryRow($Q, ...)
+    - pattern: $DB.Exec($Q, ...)
+    - pattern: $DB.QueryContext($CTX, $Q, ...)
+    - pattern: $DB.ExecContext($CTX, $Q, ...)
+    - pattern: $DB.Raw($Q, ...)
+    - pattern: $DB.Where($Q)
+    - pattern: $DB.Order($Q)
+    - pattern: $DB.Select($Q, ...)
+    - pattern: $DB.Get($DEST, $Q, ...)
+
+- id: ts-go-cmdi
+  languages: [go]
+  severity: ERROR
+  message: User input reaches exec.Command (command injection).
+  metadata: {cwe: "CWE-78", category: cmdi, confidence: HIGH}
+  mode: taint
+  pattern-sources: *gosrc
+  pattern-sinks:
+    - pattern: exec.Command(...)
+    - pattern: exec.CommandContext(...)
+    - pattern: syscall.Exec(...)
+    - pattern: os.StartProcess(...)
+
+- id: ts-go-path-traversal
+  languages: [go]
+  severity: ERROR
+  message: User input in a file path (path traversal). Note filepath.Clean does NOT prevent '../' escapes.
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *gosrc
+  pattern-sanitizers:
+    - pattern: filepath.Base(...)
+  pattern-sinks:
+    - pattern: os.Open(...)
+    - pattern: os.OpenFile(...)
+    - pattern: os.ReadFile(...)
+    - pattern: os.WriteFile(...)
+    - pattern: os.Create(...)
+    - pattern: os.Remove(...)
+    - pattern: os.RemoveAll(...)
+    - pattern: ioutil.ReadFile(...)
+    - pattern: ioutil.WriteFile(...)
+    - pattern: http.ServeFile($W, $R, $P)
+    - pattern: $C.File(...)
+    - pattern: $C.Attachment(...)
+    - pattern: filepath.Join(...)
+
+- id: ts-go-ssrf
+  languages: [go]
+  severity: ERROR
+  message: User input controls an outbound HTTP request URL (SSRF).
+  metadata: {cwe: "CWE-918", category: ssrf, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *gosrc
+  pattern-sinks:
+    - pattern: http.Get(...)
+    - pattern: http.Post(...)
+    - pattern: http.Head(...)
+    - pattern: http.PostForm(...)
+    - pattern: http.NewRequest($M, $URL, ...)
+    - pattern: http.NewRequestWithContext($CTX, $M, $URL, ...)
+    - pattern: net.Dial(...)
+    - pattern: '($CL : *http.Client).Get(...)'
+
+- id: ts-go-open-redirect
+  languages: [go]
+  severity: WARNING
+  message: User input in a redirect (open redirect).
+  metadata: {cwe: "CWE-601", category: open-redirect, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *gosrc
+  pattern-sinks:
+    - pattern: http.Redirect($W, $R, $URL, ...)
+    - pattern: $C.Redirect($CODE, $URL)
+
+- id: ts-go-xss
+  languages: [go]
+  severity: WARNING
+  message: User input written to the response or marked safe HTML (XSS).
+  metadata: {cwe: "CWE-79", category: xss, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *gosrc
+  pattern-sanitizers:
+    - pattern: html.EscapeString(...)
+    - pattern: template.HTMLEscapeString(...)
+  pattern-sinks:
+    - pattern: fmt.Fprintf($W, ...)
+    - pattern: fmt.Fprint($W, ...)
+    - pattern: $W.Write(...)
+    - pattern: io.WriteString($W, ...)
+    - pattern: template.HTML(...)
+    - pattern: template.JS(...)
+    - pattern: template.URL(...)
+    - pattern: $C.String($CODE, ...)
+    - pattern: $C.Data($CODE, $CT, ...)
+
+- id: ts-go-ssti
+  languages: [go]
+  severity: ERROR
+  message: User input parsed as a template (template injection).
+  metadata: {cwe: "CWE-1336", category: ssti, confidence: HIGH}
+  mode: taint
+  pattern-sources: *gosrc
+  pattern-sinks:
+    - pattern: template.New(...).Parse(...)
+    - pattern: $T.Parse(...)
+
+- id: ts-go-tls-skip-verify
+  languages: [go]
+  severity: WARNING
+  message: InsecureSkipVerify true (TLS MITM).
+  metadata: {cwe: "CWE-295", category: tls, confidence: HIGH}
+  pattern: 'tls.Config{..., InsecureSkipVerify: true, ...}'
+
+- id: ts-go-weak-crypto
+  languages: [go]
+  severity: WARNING
+  message: Weak crypto/randomness (md5, sha1, des, rc4, math/rand).
+  metadata: {cwe: "CWE-327", category: weak-crypto, confidence: LOW}
+  pattern-either:
+    - pattern: md5.New()
+    - pattern: md5.Sum(...)
+    - pattern: sha1.New()
+    - pattern: sha1.Sum(...)
+    - pattern: des.NewCipher(...)
+    - pattern: rc4.NewCipher(...)
+    - pattern: rand.Intn(...)
+    - pattern: rand.Int63(...)
+    - pattern: rand.Read(...)
+
+- id: ts-go-jwt-none
+  languages: [go]
+  severity: ERROR
+  message: JWT parsed without verifying signing method / unverified parse (alg confusion / auth bypass).
+  metadata: {cwe: "CWE-347", category: jwt, confidence: MEDIUM}
+  pattern-either:
+    - pattern: jwt.ParseUnverified(...)
+    - pattern: $P.ParseUnverified(...)
+    - pattern: jwt.SigningMethodNone
+    - pattern: jwt.UnsafeAllowNoneSignatureType
+
+- id: ts-go-unsafe-deser
+  languages: [go]
+  severity: WARNING
+  message: gob/yaml decoding into interface{} from untrusted input.
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: LOW}
+  pattern-either:
+    - pattern: gob.NewDecoder(...).Decode(...)
+
+- id: ts-go-pprof-exposed
+  languages: [go]
+  severity: INFO
+  message: net/http/pprof imported (debug endpoints /debug/pprof exposed on default mux).
+  metadata: {cwe: "CWE-489", category: info-disclosure, confidence: MEDIUM}
+  pattern: import _ "net/http/pprof"
+
+# ================================================================ RUBY / RAILS
+- id: ts-rb-sqli
+  languages: [ruby]
+  severity: ERROR
+  message: params interpolated into SQL (ActiveRecord SQL injection).
+  metadata: {cwe: "CWE-89", category: sqli, confidence: HIGH}
+  mode: taint
+  pattern-sources: &rbsrc
+    - pattern: params
+    - pattern: params[...]
+    - pattern: cookies[...]
+    - pattern: request.headers[...]
+    - pattern: request.env[...]
+    - pattern: request.body
+    - pattern: request.query_string
+  pattern-sanitizers:
+    - pattern: $X.to_i
+    - pattern: $X.to_f
+    - pattern: ActiveRecord::Base.sanitize_sql(...)
+    - pattern: $C.connection.quote(...)
+  pattern-sinks:
+    - pattern: '$M.where("...#{...}...")'
+    - pattern: $M.where($Q)
+    - pattern: $M.find_by_sql(...)
+    - pattern: $M.order(...)
+    - pattern: $M.group(...)
+    - pattern: $M.having(...)
+    - pattern: $M.joins(...)
+    - pattern: $M.select(...)
+    - pattern: $M.pluck(...)
+    - pattern: $M.exists?(...)
+    - pattern: $M.calculate(...)
+    - pattern: $M.connection.execute(...)
+    - pattern: $M.connection.select_all(...)
+
+- id: ts-rb-cmdi
+  languages: [ruby]
+  severity: ERROR
+  message: params reach a shell command (command injection).
+  metadata: {cwe: "CWE-78", category: cmdi, confidence: HIGH}
+  mode: taint
+  pattern-sources: *rbsrc
+  pattern-sanitizers:
+    - pattern: Shellwords.escape(...)
+    - pattern: $X.shellescape
+  pattern-sinks:
+    - pattern: system(...)
+    - pattern: exec(...)
+    - pattern: spawn(...)
+    - pattern: IO.popen(...)
+    - pattern: Open3.$M(...)
+    - pattern: Kernel.open(...)
+    - pattern: open(...)
+    - pattern: '`...`'
+
+- id: ts-rb-code-injection
+  languages: [ruby]
+  severity: ERROR
+  message: params reach eval/send/constantize (RCE / arbitrary method call).
+  metadata: {cwe: "CWE-94", category: code-injection, confidence: HIGH}
+  mode: taint
+  pattern-sources: *rbsrc
+  pattern-sinks:
+    - pattern: eval(...)
+    - pattern: instance_eval(...)
+    - pattern: class_eval(...)
+    - pattern: $O.send(...)
+    - pattern: $O.public_send(...)
+    - pattern: $O.try(...)
+    - pattern: $X.constantize
+    - pattern: $X.safe_constantize
+    - pattern: Object.const_get(...)
+    - pattern: ERB.new(...)
+
+- id: ts-rb-path-traversal
+  languages: [ruby]
+  severity: ERROR
+  message: params in file path (path traversal / file disclosure).
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *rbsrc
+  pattern-sanitizers:
+    - pattern: File.basename(...)
+  pattern-sinks:
+    - pattern: File.open(...)
+    - pattern: File.read(...)
+    - pattern: File.new(...)
+    - pattern: File.join(...)
+    - pattern: IO.read(...)
+    - pattern: send_file(...)
+    - pattern: send_data(...)
+    - pattern: 'render(file: ...)'
+    - pattern: Rails.root.join(...)
+    - pattern: FileUtils.$M(...)
+
+- id: ts-rb-ssrf
+  languages: [ruby]
+  severity: ERROR
+  message: params control outbound request (SSRF).
+  metadata: {cwe: "CWE-918", category: ssrf, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *rbsrc
+  pattern-sinks:
+    - pattern: Net::HTTP.get(...)
+    - pattern: Net::HTTP.get_response(...)
+    - pattern: URI.open(...)
+    - pattern: HTTParty.$M(...)
+    - pattern: Faraday.$M(...)
+    - pattern: RestClient.$M(...)
+    - pattern: Typhoeus.$M(...)
+
+- id: ts-rb-open-redirect
+  languages: [ruby]
+  severity: WARNING
+  message: params in redirect_to (open redirect). Rails 7 needs allow_other_host for external.
+  metadata: {cwe: "CWE-601", category: open-redirect, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *rbsrc
+  pattern-sinks:
+    - pattern: redirect_to(...)
+
+- id: ts-rb-xss
+  languages: [ruby]
+  severity: WARNING
+  message: Output marked html_safe/raw or rendered inline (XSS).
+  metadata: {cwe: "CWE-79", category: xss, confidence: MEDIUM}
+  pattern-either:
+    - pattern: $X.html_safe
+    - pattern: raw(...)
+    - pattern: 'render(html: ...)'
+    - pattern: 'render(inline: ...)'
+    - pattern: 'render(text: ...)'
+
+- id: ts-rb-deserialization
+  languages: [ruby]
+  severity: ERROR
+  message: Unsafe deserialization (Marshal/YAML.load/Oj object mode -> RCE).
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: MEDIUM}
+  pattern-either:
+    - pattern: Marshal.load(...)
+    - pattern: Marshal.restore(...)
+    - pattern: YAML.load(...)
+    - pattern: YAML.unsafe_load(...)
+    - pattern: Psych.load(...)
+    - pattern: 'Oj.load($X, mode: :object)'
+    - pattern: JSON.load(...)
+
+- id: ts-rb-mass-assignment
+  languages: [ruby]
+  severity: WARNING
+  message: Strong parameters bypassed (permit! / unfiltered params) -> mass assignment (role/admin tampering).
+  metadata: {cwe: "CWE-915", category: mass-assignment, confidence: HIGH}
+  pattern-either:
+    - pattern: params.permit!
+    - pattern: params.require(...).permit!
+    - pattern: $M.new(params)
+    - pattern: $M.create(params)
+    - pattern: $M.update(params)
+    - pattern: $M.update_attributes(params)
+    - pattern: 'params.require($K).permit(..., :admin, ...)'
+    - pattern: 'params.require($K).permit(..., :role, ...)'
+
+- id: ts-rb-csrf-skip
+  languages: [ruby]
+  severity: WARNING
+  message: CSRF protection skipped/disabled.
+  metadata: {cwe: "CWE-352", category: csrf, confidence: MEDIUM}
+  pattern-either:
+    - pattern: skip_before_action :verify_authenticity_token
+    - pattern: 'skip_before_action :verify_authenticity_token, ...'
+    - pattern: 'protect_from_forgery with: :null_session'
+    - pattern: skip_forgery_protection
+
+# ================================================================ C# / .NET
+- id: ts-cs-sqli
+  languages: [csharp]
+  severity: ERROR
+  message: String-built SQL passed to a command (SQL injection).
+  metadata: {cwe: "CWE-89", category: sqli, confidence: MEDIUM}
+  pattern-either:
+    - pattern: new SqlCommand("..." + $X, ...)
+    - pattern: new SqlCommand($"...", ...)
+    - pattern: $CMD.CommandText = "..." + $X
+    - pattern: $CMD.CommandText = $"..."
+    - pattern: $CTX.Database.ExecuteSqlRaw("..." + $X, ...)
+    - pattern: $CTX.Database.ExecuteSqlRaw($"...", ...)
+    - pattern: $DB.FromSqlRaw("..." + $X, ...)
+    - pattern: $DB.FromSqlRaw($"...", ...)
+    - pattern: $CONN.Query("..." + $X, ...)
+    - pattern: $CONN.Execute("..." + $X, ...)
+
+- id: ts-cs-cmdi
+  languages: [csharp]
+  severity: ERROR
+  message: Process started with a dynamic command line (command injection if user-controlled).
+  metadata: {cwe: "CWE-78", category: cmdi, confidence: LOW}
+  pattern-either:
+    - pattern: Process.Start("..." + $X, ...)
+    - pattern: Process.Start($A, "..." + $X)
+    - pattern: Process.Start($A, $"...")
+    - pattern: $PSI.Arguments = "..." + $X
+    - pattern: $PSI.Arguments = $"..."
+
+- id: ts-cs-deserialization
+  languages: [csharp]
+  severity: ERROR
+  message: Dangerous .NET deserializer (BinaryFormatter/LosFormatter/NetDataContract/TypeNameHandling -> RCE; try ysoserial.net).
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: HIGH}
+  pattern-either:
+    - pattern: new BinaryFormatter()
+    - pattern: new LosFormatter()
+    - pattern: new NetDataContractSerializer()
+    - pattern: new SoapFormatter()
+    - pattern: new ObjectStateFormatter()
+    - pattern: TypeNameHandling.All
+    - pattern: TypeNameHandling.Auto
+    - pattern: TypeNameHandling.Objects
+    - pattern: new JavaScriptSerializer(new SimpleTypeResolver())
+
+- id: ts-cs-xxe
+  languages: [csharp]
+  severity: WARNING
+  message: XML resolver enabled / DTD processing allowed (XXE).
+  metadata: {cwe: "CWE-611", category: xxe, confidence: MEDIUM}
+  pattern-either:
+    - pattern: $D.XmlResolver = new XmlUrlResolver()
+    - pattern: DtdProcessing.Parse
+    - pattern: $S.ProhibitDtd = false
+
+- id: ts-cs-open-redirect
+  languages: [csharp]
+  severity: WARNING
+  message: Redirect to a non-local URL from user input (open redirect). Use LocalRedirect / Url.IsLocalUrl.
+  metadata: {cwe: "CWE-601", category: open-redirect, confidence: LOW}
+  pattern-either:
+    - pattern: Redirect(Request.Query[$K])
+    - pattern: Response.Redirect(Request.QueryString[$K])
+    - pattern: Redirect(returnUrl)
+
+- id: ts-cs-path-traversal
+  languages: [csharp]
+  severity: WARNING
+  message: Path built from request data (path traversal).
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: LOW}
+  pattern-either:
+    - pattern: File.ReadAllText(Path.Combine($A, $B))
+    - pattern: File.ReadAllBytes(Path.Combine($A, $B))
+    - pattern: PhysicalFile(Path.Combine($A, $B), ...)
+    - pattern: System.IO.File.OpenRead(Path.Combine($A, $B))
+
+- id: ts-cs-weak-crypto
+  languages: [csharp]
+  severity: WARNING
+  message: Weak crypto (MD5/SHA1/DES/ECB/System.Random).
+  metadata: {cwe: "CWE-327", category: weak-crypto, confidence: LOW}
+  pattern-either:
+    - pattern: MD5.Create()
+    - pattern: SHA1.Create()
+    - pattern: new MD5CryptoServiceProvider()
+    - pattern: DES.Create()
+    - pattern: CipherMode.ECB
+    - pattern: new Random()
+
+- id: ts-cs-tls-disabled
+  languages: [csharp]
+  severity: WARNING
+  message: Certificate validation callback always returns true (MITM).
+  metadata: {cwe: "CWE-295", category: tls, confidence: HIGH}
+  pattern-either:
+    - pattern: ServicePointManager.ServerCertificateValidationCallback = (...) => true
+    - pattern: $H.ServerCertificateCustomValidationCallback = (...) => true
+    - pattern: HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+
+- id: ts-cs-allow-anonymous
+  languages: [csharp]
+  severity: INFO
+  message: '[AllowAnonymous] on an endpoint — verify it should be public (broken access control hunting).'
+  metadata: {cwe: "CWE-284", category: broken-access-control, confidence: LOW}
+  pattern: |
+    [AllowAnonymous]
+    public $T $M(...) { ... }
+
+# ================================================================ SOLIDITY
+- id: ts-sol-tx-origin
+  languages: [solidity]
+  severity: ERROR
+  message: tx.origin used for authorization (phishing via malicious contract).
+  metadata: {cwe: "CWE-477", category: smart-contract, confidence: HIGH}
+  pattern-either:
+    - pattern: require(tx.origin == $X, ...)
+    - pattern: require($X == tx.origin, ...)
+    - pattern: 'if (tx.origin == $X) { ... }'
+    - pattern: 'if (tx.origin != $X) { ... }'
+
+- id: ts-sol-delegatecall-user
+  languages: [solidity]
+  severity: ERROR
+  message: delegatecall to an address/data that may be caller-controlled (storage takeover).
+  metadata: {cwe: "CWE-829", category: smart-contract, confidence: MEDIUM}
+  patterns:
+    - pattern-inside: |
+        function $F(..., address $T, ...) { ... }
+    - pattern: $T.delegatecall(...)
+
+- id: ts-sol-unchecked-call
+  languages: [solidity]
+  severity: WARNING
+  message: Low-level call return value not checked.
+  metadata: {cwe: "CWE-252", category: smart-contract, confidence: MEDIUM}
+  pattern-either:
+    - pattern: $A.call(...);
+    - pattern: $A.send(...);
+    - pattern: $A.delegatecall(...);
+
+- id: ts-sol-weak-randomness
+  languages: [solidity]
+  severity: WARNING
+  message: Block properties used as randomness (miner/validator-predictable).
+  metadata: {cwe: "CWE-330", category: smart-contract, confidence: MEDIUM}
+  pattern-either:
+    - pattern: keccak256(abi.encodePacked(..., block.timestamp, ...))
+    - pattern: keccak256(abi.encodePacked(..., block.difficulty, ...))
+    - pattern: keccak256(abi.encodePacked(..., block.prevrandao, ...))
+    - pattern: blockhash(...)
+    - pattern: block.timestamp % $N
+
+- id: ts-sol-selfdestruct
+  languages: [solidity]
+  severity: WARNING
+  message: selfdestruct present — check access control.
+  metadata: {cwe: "CWE-284", category: smart-contract, confidence: LOW}
+  pattern-either:
+    - pattern: selfdestruct(...)
+    - pattern: suicide(...)
+
+- id: ts-sol-ecrecover-zero
+  languages: [solidity]
+  severity: WARNING
+  message: ecrecover result not checked against address(0) / no nonce (signature forgery/replay). Prefer OpenZeppelin ECDSA.
+  metadata: {cwe: "CWE-347", category: smart-contract, confidence: LOW}
+  pattern: ecrecover(...)
+
+- id: ts-sol-arbitrary-transferfrom
+  languages: [solidity]
+  severity: ERROR
+  message: transferFrom with a caller-supplied 'from' address (steal approved tokens).
+  metadata: {cwe: "CWE-284", category: smart-contract, confidence: MEDIUM}
+  patterns:
+    - pattern-inside: |
+        function $F(..., address $FROM, ...) { ... }
+    - pattern-either:
+      - pattern: $TOKEN.transferFrom($FROM, $TO, $AMT)
+      - pattern: $TOKEN.safeTransferFrom($FROM, $TO, $AMT)
+    - pattern-not: $TOKEN.transferFrom(msg.sender, $TO, $AMT)
+
+- id: ts-sol-unprotected-initializer
+  languages: [solidity]
+  severity: ERROR
+  message: Public initialize() without initializer modifier (anyone can take ownership of proxy implementation).
+  metadata: {cwe: "CWE-665", category: smart-contract, confidence: MEDIUM}
+  patterns:
+    - pattern: |
+        function initialize(...) { ... }
+    - pattern-not: |
+        function initialize(...) initializer { ... }
+    - pattern-not: |
+        function initialize(...) onlyOwner { ... }
+
+- id: ts-sol-spot-price-oracle
+  languages: [solidity]
+  severity: WARNING
+  message: Spot reserves/balance used as a price (flash-loan price manipulation).
+  metadata: {cwe: "CWE-682", category: smart-contract, confidence: LOW}
+  pattern-either:
+    - pattern: $PAIR.getReserves()
+    - pattern: $T.balanceOf(address(this))
+    - pattern: $POOL.slot0()

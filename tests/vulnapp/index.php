@@ -1,0 +1,1 @@
+<?php $id=$_GET["id"]; mysqli_query($c, "SELECT * FROM u WHERE id=".$id); system("ping ".$_GET["h"]); include($_GET["page"]); echo $_GET["n"]; unserialize($_COOKIE["d"]); header("Location: ".$_GET["u"]); if ($hash == $_POST["h"]) {} ?>

@@ -1,0 +1,501 @@
+rules:
+# ============================================================ TAINT: injection classes
+- id: ts-py-sqli
+  languages: [python]
+  severity: ERROR
+  message: User input reaches a raw SQL query (SQL injection). Use parameterized queries.
+  metadata: {cwe: "CWE-89", category: sqli, confidence: HIGH}
+  mode: taint
+  pattern-sources: &pysrc
+    - pattern: flask.request.$ANY
+    - pattern: request.args
+    - pattern: request.form
+    - pattern: request.values
+    - pattern: request.json
+    - pattern: request.get_json(...)
+    - pattern: request.data
+    - pattern: request.cookies
+    - pattern: request.headers
+    - pattern: request.files
+    - pattern: request.view_args
+    - pattern: request.GET
+    - pattern: request.POST
+    - pattern: request.body
+    - pattern: request.query_params
+    - pattern: request.path_params
+    - pattern: request.META
+    - pattern: sys.argv
+    - pattern: input(...)
+  pattern-sanitizers:
+    - pattern: int(...)
+    - pattern: float(...)
+    - pattern: uuid.UUID(...)
+  pattern-sinks:
+    - patterns:
+      - pattern-either:
+        - pattern: $C.execute($Q, ...)
+        - pattern: $C.executemany($Q, ...)
+        - pattern: $C.executescript($Q, ...)
+        - pattern: $C.raw($Q, ...)
+        - pattern: $C.extra(...)
+        - pattern: sqlalchemy.text($Q)
+        - pattern: text($Q)
+      - focus-metavariable: $Q
+
+- id: ts-py-cmdi
+  languages: [python]
+  severity: ERROR
+  message: User input reaches an OS command (command injection).
+  metadata: {cwe: "CWE-78", category: cmdi, confidence: HIGH}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sanitizers:
+    - pattern: shlex.quote(...)
+    - pattern: int(...)
+  pattern-sinks:
+    - pattern: os.system(...)
+    - pattern: os.popen(...)
+    - pattern: os.execl(...)
+    - pattern: os.execv(...)
+    - pattern: os.spawnl(...)
+    - pattern: commands.getoutput(...)
+    - pattern: subprocess.$F(..., shell=True, ...)
+
+- id: ts-py-code-injection
+  languages: [python]
+  severity: ERROR
+  message: User input reaches eval/exec/compile/import (remote code execution).
+  metadata: {cwe: "CWE-94", category: code-injection, confidence: HIGH}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - pattern: eval(...)
+    - pattern: exec(...)
+    - pattern: compile(...)
+    - pattern: __import__(...)
+    - pattern: importlib.import_module(...)
+    - pattern: getattr($OBJ, ...)
+
+- id: ts-py-path-traversal
+  languages: [python]
+  severity: ERROR
+  message: User input used in a filesystem path (path traversal / arbitrary file read-write-delete).
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sanitizers:
+    - pattern: werkzeug.utils.secure_filename(...)
+    - pattern: secure_filename(...)
+    - pattern: os.path.basename(...)
+  pattern-sinks:
+    - pattern: open(...)
+    - pattern: io.open(...)
+    - pattern: flask.send_file(...)
+    - pattern: send_file(...)
+    - pattern: send_from_directory(...)
+    - pattern: os.remove(...)
+    - pattern: os.unlink(...)
+    - pattern: shutil.rmtree(...)
+    - pattern: shutil.copy(...)
+    - pattern: shutil.move(...)
+    - pattern: os.rename(...)
+    - pattern: pathlib.Path(...)
+    - pattern: Path(...)
+    - pattern: FileResponse(...)
+
+- id: ts-py-ssrf
+  languages: [python]
+  severity: ERROR
+  message: User input controls the URL of a server-side request (SSRF).
+  metadata: {cwe: "CWE-918", category: ssrf, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - patterns:
+      - pattern-either:
+        - pattern: requests.$M($URL, ...)
+        - pattern: requests.request($METHOD, $URL, ...)
+        - pattern: httpx.$M($URL, ...)
+        - pattern: urllib.request.urlopen($URL, ...)
+        - pattern: urllib.request.Request($URL, ...)
+        - pattern: urlopen($URL, ...)
+        - pattern: $SESSION.get($URL, ...)
+        - pattern: $SESSION.post($URL, ...)
+      - focus-metavariable: $URL
+
+- id: ts-py-ssti
+  languages: [python]
+  severity: ERROR
+  message: User input rendered as a template (server-side template injection -> RCE).
+  metadata: {cwe: "CWE-1336", category: ssti, confidence: HIGH}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - pattern: flask.render_template_string(...)
+    - pattern: render_template_string(...)
+    - pattern: jinja2.Template(...)
+    - pattern: Template(...)
+    - pattern: $ENV.from_string(...)
+    - pattern: mako.template.Template(...)
+
+- id: ts-py-open-redirect
+  languages: [python]
+  severity: WARNING
+  message: User input controls a redirect target (open redirect; chain with OAuth for token theft).
+  metadata: {cwe: "CWE-601", category: open-redirect, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - pattern: flask.redirect(...)
+    - pattern: redirect(...)
+    - pattern: HttpResponseRedirect(...)
+    - pattern: RedirectResponse(...)
+
+- id: ts-py-xss
+  languages: [python]
+  severity: WARNING
+  message: User input returned in an HTML response without escaping (reflected XSS).
+  metadata: {cwe: "CWE-79", category: xss, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sanitizers:
+    - pattern: html.escape(...)
+    - pattern: markupsafe.escape(...)
+    - pattern: escape(...)
+    - pattern: bleach.clean(...)
+    - pattern: json.dumps(...)
+    - pattern: jsonify(...)
+    - pattern: int(...)
+  pattern-sinks:
+    - pattern: flask.make_response(...)
+    - pattern: make_response(...)
+    - pattern: HttpResponse(...)
+    - pattern: HTMLResponse(...)
+    - pattern: markupsafe.Markup(...)
+    - pattern: Markup(...)
+    - pattern: mark_safe(...)
+    - patterns:
+      - pattern-inside: |
+          @$APP.route(...)
+          def $F(...):
+            ...
+      - pattern-either:
+        - pattern: return "..." + $X
+        - pattern: return $X + "..."
+        - pattern: return f"..."
+        - pattern: return "...".format(...)
+        - pattern: return "..." % $X
+
+- id: ts-py-nosqli
+  languages: [python]
+  severity: ERROR
+  message: "User-controlled object passed to a MongoDB query (NoSQL operator injection, e.g. {\"$ne\":null})."
+  metadata: {cwe: "CWE-943", category: nosqli, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - pattern: $COL.find(...)
+    - pattern: $COL.find_one(...)
+    - pattern: $COL.update_one(...)
+    - pattern: $COL.delete_many(...)
+    - pattern: $COL.aggregate(...)
+
+- id: ts-py-ldapi
+  languages: [python]
+  severity: ERROR
+  message: User input in an LDAP filter (LDAP injection / auth bypass).
+  metadata: {cwe: "CWE-90", category: ldapi, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sanitizers:
+    - pattern: ldap.filter.escape_filter_chars(...)
+    - pattern: escape_filter_chars(...)
+  pattern-sinks:
+    - pattern: $L.search_s(...)
+    - pattern: $L.search_ext_s(...)
+    - pattern: $L.search(...)
+
+- id: ts-py-xpath-injection
+  languages: [python]
+  severity: WARNING
+  message: User input in an XPath expression (XPath injection).
+  metadata: {cwe: "CWE-643", category: xpath-injection, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - pattern: $TREE.xpath(...)
+
+- id: ts-py-header-injection
+  languages: [python]
+  severity: WARNING
+  message: User input placed in a response header or cookie (header injection / response splitting).
+  metadata: {cwe: "CWE-113", category: header-injection, confidence: LOW}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - pattern: $RESP.headers[$K] = $V
+    - pattern: $RESP.set_cookie(...)
+
+- id: ts-py-redos
+  languages: [python]
+  severity: WARNING
+  message: User input compiled as a regular expression (ReDoS / regex injection).
+  metadata: {cwe: "CWE-1333", category: redos, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sanitizers:
+    - pattern: re.escape(...)
+  pattern-sinks:
+    - patterns:
+      - pattern-either:
+        - pattern: re.compile($P, ...)
+        - pattern: re.match($P, ...)
+        - pattern: re.search($P, ...)
+        - pattern: re.sub($P, ...)
+      - focus-metavariable: $P
+
+- id: ts-py-log-injection
+  languages: [python]
+  severity: INFO
+  message: User input written to logs unsanitized (log forging).
+  metadata: {cwe: "CWE-117", category: log-injection, confidence: LOW}
+  mode: taint
+  pattern-sources: *pysrc
+  pattern-sinks:
+    - pattern: logging.$L(...)
+    - pattern: logger.$L(...)
+
+# ============================================================ PATTERN rules
+- id: ts-py-mass-assignment
+  languages: [python]
+  severity: WARNING
+  message: Whole request body unpacked into a model/object (mass assignment -> e.g. is_admin=true, role, balance).
+  metadata: {cwe: "CWE-915", category: mass-assignment, confidence: MEDIUM}
+  pattern-either:
+    - pattern: $MODEL(**request.json)
+    - pattern: $MODEL(**request.get_json(...))
+    - pattern: $MODEL(**request.form)
+    - pattern: $MODEL(**request.data)
+    - pattern: $MODEL.objects.create(**request.POST)
+    - pattern: $OBJ.__dict__.update(...)
+    - patterns:
+      - pattern: |
+          for $K, $V in $DATA.items():
+            ...
+            setattr($OBJ, $K, $V)
+
+- id: ts-py-insecure-deserialization
+  languages: [python]
+  severity: ERROR
+  message: Insecure deserialization primitive. If input is attacker-controlled this is RCE.
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: MEDIUM}
+  pattern-either:
+    - pattern: pickle.loads(...)
+    - pattern: pickle.load(...)
+    - pattern: cPickle.loads(...)
+    - pattern: dill.loads(...)
+    - pattern: shelve.open(...)
+    - pattern: marshal.loads(...)
+    - pattern: jsonpickle.decode(...)
+    - pattern: torch.load(...)
+    - pattern: joblib.load(...)
+    - pattern: numpy.load(..., allow_pickle=True, ...)
+    - pattern: pandas.read_pickle(...)
+    - pattern: yaml.unsafe_load(...)
+    - pattern: yaml.load(..., Loader=yaml.Loader, ...)
+    - pattern: yaml.load(..., Loader=yaml.UnsafeLoader, ...)
+    - pattern: yaml.load(..., Loader=yaml.FullLoader, ...)
+    - patterns:
+      - pattern: yaml.load($X)
+
+- id: ts-py-xxe
+  languages: [python]
+  severity: ERROR
+  message: XML parser with external entities / network enabled (XXE).
+  metadata: {cwe: "CWE-611", category: xxe, confidence: MEDIUM}
+  pattern-either:
+    - pattern: lxml.etree.XMLParser(..., resolve_entities=True, ...)
+    - pattern: etree.XMLParser(..., resolve_entities=True, ...)
+    - pattern: lxml.etree.XMLParser(..., no_network=False, ...)
+    - pattern: etree.XMLParser(..., no_network=False, ...)
+    - pattern: xml.sax.make_parser(...)
+    - pattern: xml.dom.pulldom.parse(...)
+
+- id: ts-py-jwt-no-verify
+  languages: [python]
+  severity: ERROR
+  message: JWT decoded without signature verification / 'none' algorithm allowed (auth bypass).
+  metadata: {cwe: "CWE-347", category: jwt, confidence: HIGH}
+  pattern-either:
+    - pattern: jwt.decode(..., verify=False, ...)
+    - pattern: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+    - pattern: jwt.decode(..., algorithms=[..., "none", ...], ...)
+    - pattern: jwt.get_unverified_claims(...)
+    - pattern: jwt.get_unverified_header(...)
+
+- id: ts-py-jwt-hardcoded-secret
+  languages: [python]
+  severity: ERROR
+  message: JWT signed/verified with a hardcoded secret (token forgery if the repo is public).
+  metadata: {cwe: "CWE-798", category: hardcoded-secret, confidence: MEDIUM}
+  pattern-either:
+    - pattern: jwt.encode($P, "...", ...)
+    - pattern: jwt.decode($T, "...", ...)
+
+- id: ts-py-hardcoded-secret-config
+  languages: [python]
+  severity: WARNING
+  message: Hardcoded SECRET_KEY / credential in config (session forgery, signed-cookie tampering).
+  metadata: {cwe: "CWE-798", category: hardcoded-secret, confidence: MEDIUM}
+  patterns:
+    - pattern-either:
+      - pattern: $K = "..."
+      - pattern: $APP.config[$K] = "..."
+      - pattern: $APP.secret_key = "..."
+    - metavariable-regex:
+        metavariable: $K
+        regex: (?i).*(secret_key|secret|password|passwd|api_key|apikey|token|private_key|aws_secret).*
+
+- id: ts-py-weak-hash
+  languages: [python]
+  severity: WARNING
+  message: Weak hash (MD5/SHA1). Critical if used for passwords, tokens or signatures.
+  metadata: {cwe: "CWE-328", category: weak-crypto, confidence: LOW}
+  pattern-either:
+    - pattern: hashlib.md5(...)
+    - pattern: hashlib.sha1(...)
+    - pattern: hashlib.new("md5", ...)
+    - pattern: hashlib.new("sha1", ...)
+
+- id: ts-py-weak-cipher
+  languages: [python]
+  severity: WARNING
+  message: Weak cipher / ECB mode.
+  metadata: {cwe: "CWE-327", category: weak-crypto, confidence: MEDIUM}
+  pattern-either:
+    - pattern: Crypto.Cipher.DES.new(...)
+    - pattern: Crypto.Cipher.ARC4.new(...)
+    - pattern: DES.new(...)
+    - pattern: ARC4.new(...)
+    - pattern: AES.new($K, AES.MODE_ECB, ...)
+    - pattern: modes.ECB(...)
+    - pattern: algorithms.TripleDES(...)
+    - pattern: algorithms.ARC4(...)
+
+- id: ts-py-insecure-random
+  languages: [python]
+  severity: WARNING
+  message: Non-cryptographic random in a security function — predictable tokens/OTPs/reset links.
+  metadata: {cwe: "CWE-338", category: insecure-random, confidence: MEDIUM}
+  patterns:
+    - pattern-either:
+      - pattern: random.random()
+      - pattern: random.randint(...)
+      - pattern: random.choice(...)
+      - pattern: random.choices(...)
+      - pattern: random.getrandbits(...)
+      - pattern: random.randrange(...)
+    - pattern-inside: |
+        def $F(...):
+          ...
+    - metavariable-regex:
+        metavariable: $F
+        regex: (?i).*(token|otp|code|secret|password|passwd|reset|session|nonce|salt|key|verify|invite|coupon).*
+
+- id: ts-py-tls-verify-disabled
+  languages: [python]
+  severity: WARNING
+  message: TLS certificate verification disabled (MITM).
+  metadata: {cwe: "CWE-295", category: tls, confidence: HIGH}
+  pattern-either:
+    - pattern: requests.$M(..., verify=False, ...)
+    - pattern: httpx.$M(..., verify=False, ...)
+    - pattern: ssl._create_unverified_context(...)
+    - pattern: $CTX.check_hostname = False
+    - pattern: $CTX.verify_mode = ssl.CERT_NONE
+
+- id: ts-py-debug-enabled
+  languages: [python]
+  severity: WARNING
+  message: Debug mode enabled (Werkzeug debugger console = RCE; Django DEBUG leaks settings).
+  metadata: {cwe: "CWE-489", category: misconfig, confidence: HIGH}
+  pattern-either:
+    - pattern: $APP.run(..., debug=True, ...)
+    - pattern: DEBUG = True
+    - pattern: $APP.config["DEBUG"] = True
+    - pattern: $APP.debug = True
+
+- id: ts-py-insecure-cookie
+  languages: [python]
+  severity: INFO
+  message: Cookie flags weakened (missing Secure/HttpOnly/SameSite).
+  metadata: {cwe: "CWE-614", category: cookie, confidence: MEDIUM}
+  pattern-either:
+    - pattern: SESSION_COOKIE_SECURE = False
+    - pattern: SESSION_COOKIE_HTTPONLY = False
+    - pattern: CSRF_COOKIE_SECURE = False
+    - pattern: $R.set_cookie(..., httponly=False, ...)
+    - pattern: $R.set_cookie(..., secure=False, ...)
+
+- id: ts-py-csrf-disabled
+  languages: [python]
+  severity: WARNING
+  message: CSRF protection disabled on a view or globally.
+  metadata: {cwe: "CWE-352", category: csrf, confidence: MEDIUM}
+  pattern-either:
+    - pattern: |
+        @csrf_exempt
+        def $F(...):
+          ...
+    - pattern: WTF_CSRF_ENABLED = False
+    - pattern: $APP.config["WTF_CSRF_ENABLED"] = False
+
+- id: ts-py-cors-misconfig
+  languages: [python]
+  severity: WARNING
+  message: CORS allows any/reflected origin (critical with credentials -> cross-origin data theft).
+  metadata: {cwe: "CWE-942", category: cors, confidence: MEDIUM}
+  pattern-either:
+    - pattern: CORS($APP, ..., supports_credentials=True, ...)
+    - pattern: CORS_ORIGIN_ALLOW_ALL = True
+    - pattern: CORS_ALLOW_ALL_ORIGINS = True
+    - pattern: $R.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin")
+    - pattern: $R.headers["Access-Control-Allow-Origin"] = request.headers["Origin"]
+
+- id: ts-py-assert-auth
+  languages: [python]
+  severity: WARNING
+  message: assert used for a security check — removed when Python runs with -O.
+  metadata: {cwe: "CWE-617", category: broken-access-control, confidence: LOW}
+  patterns:
+    - pattern: assert $COND, ...
+    - metavariable-regex:
+        metavariable: $COND
+        regex: (?i).*(admin|auth|perm|role|owner|is_staff|logged|user).*
+
+- id: ts-py-timing-compare
+  languages: [python]
+  severity: INFO
+  message: Secret compared with == (timing attack). Use hmac.compare_digest.
+  metadata: {cwe: "CWE-208", category: weak-crypto, confidence: LOW}
+  patterns:
+    - pattern: $A == $B
+    - metavariable-regex:
+        metavariable: $A
+        regex: (?i).*(token|signature|sig|hmac|secret|api_key|apikey|digest).*
+
+- id: ts-py-zip-slip
+  languages: [python]
+  severity: WARNING
+  message: Archive extracted without path validation (Zip Slip / tar path traversal).
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: MEDIUM}
+  pattern-either:
+    - pattern: $T.extractall(...)
+    - pattern: tarfile.open(...).extract(...)
+
+- id: ts-py-tempfile-mktemp
+  languages: [python]
+  severity: INFO
+  message: tempfile.mktemp is race-prone (symlink attacks).
+  metadata: {cwe: "CWE-377", category: misconfig, confidence: HIGH}
+  pattern: tempfile.mktemp(...)

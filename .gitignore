@@ -1,0 +1,13 @@
+# Allowlist: ignore everything, then publish only the tool itself.
+# Never remove the top rule: trendsast-out/ holds real scan results.
+/*
+!/.gitignore
+!/README.md
+!/trendsast.py
+!/install.sh
+!/export_for_chat.py
+!/rules/
+!/tests/
+__pycache__/
+*.pyc
+trendsast-out/

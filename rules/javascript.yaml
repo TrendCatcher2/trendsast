@@ -1,0 +1,567 @@
+rules:
+# ============================================================ SERVER-SIDE TAINT (Express / Koa / Nest / Next API)
+- id: ts-js-sqli
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: User input concatenated into a raw SQL query (SQL injection).
+  metadata: {cwe: "CWE-89", category: sqli, confidence: HIGH}
+  mode: taint
+  pattern-sources: &jssrc
+    - pattern: req.query
+    - pattern: req.body
+    - pattern: req.params
+    - pattern: req.headers
+    - pattern: req.cookies
+    - pattern: req.files
+    - pattern: req.file
+    - pattern: req.get(...)
+    - pattern: req.header(...)
+    - pattern: request.query
+    - pattern: request.body
+    - pattern: request.params
+    - pattern: ctx.request.body
+    - pattern: ctx.query
+    - pattern: ctx.params
+    - pattern: event.body
+    - pattern: event.queryStringParameters
+    - pattern: event.pathParameters
+    - pattern: process.argv
+    - pattern: searchParams.get(...)
+  pattern-sanitizers: &jssan
+    - pattern: parseInt(...)
+    - pattern: Number(...)
+    - pattern: parseFloat(...)
+  pattern-sinks:
+    - patterns:
+      - pattern-either:
+        - pattern: $DB.query($Q, ...)
+        - pattern: $DB.execute($Q, ...)
+        - pattern: $DB.raw($Q, ...)
+        - pattern: $DB.$queryRawUnsafe($Q, ...)
+        - pattern: $DB.$executeRawUnsafe($Q, ...)
+        - pattern: $SEQ.query($Q, ...)
+        - pattern: $KNEX.raw($Q, ...)
+        - pattern: $KNEX.whereRaw($Q, ...)
+        - pattern: $KNEX.orderByRaw($Q, ...)
+        - pattern: db.all($Q, ...)
+        - pattern: db.get($Q, ...)
+        - pattern: db.run($Q, ...)
+        - pattern: $POOL.request().query($Q)
+        - pattern: $REPO.query($Q, ...)
+      - focus-metavariable: $Q
+
+- id: ts-js-cmdi
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: User input reaches a shell command (command injection).
+  metadata: {cwe: "CWE-78", category: cmdi, confidence: HIGH}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sinks:
+    - pattern: child_process.exec(...)
+    - pattern: child_process.execSync(...)
+    - pattern: exec(...)
+    - pattern: execSync(...)
+    - pattern: $CP.exec(...)
+    - pattern: $CP.execSync(...)
+    - pattern: 'spawn($CMD, $ARGS, {..., shell: true, ...})'
+    - pattern: '$CP.spawn($CMD, $ARGS, {..., shell: true, ...})'
+    - pattern: execa.command(...)
+    - pattern: shelljs.exec(...)
+
+- id: ts-js-code-injection
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: User input reaches eval/Function/vm (remote code execution).
+  metadata: {cwe: "CWE-94", category: code-injection, confidence: HIGH}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sinks:
+    - pattern: eval(...)
+    - pattern: new Function(...)
+    - pattern: Function(...)
+    - pattern: vm.runInNewContext(...)
+    - pattern: vm.runInThisContext(...)
+    - pattern: vm.runInContext(...)
+    - pattern: new vm.Script(...)
+    - pattern: setTimeout($CODE, ...)
+    - pattern: setInterval($CODE, ...)
+    - pattern: require($MOD)
+    - pattern: import($MOD)
+
+- id: ts-js-path-traversal
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: User input used in a filesystem path (path traversal / arbitrary file read-write).
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sanitizers:
+    - pattern: path.basename(...)
+    - pattern: parseInt(...)
+  pattern-sinks:
+    - pattern: fs.$F(...)
+    - pattern: fsPromises.$F(...)
+    - pattern: res.sendFile(...)
+    - pattern: res.download(...)
+    - pattern: res.render(...)
+    - pattern: path.join(...)
+    - pattern: path.resolve(...)
+
+- id: ts-js-ssrf
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: User input controls the URL of a server-side HTTP request (SSRF).
+  metadata: {cwe: "CWE-918", category: ssrf, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sinks:
+    - patterns:
+      - pattern-either:
+        - pattern: axios($URL, ...)
+        - pattern: axios.$M($URL, ...)
+        - pattern: fetch($URL, ...)
+        - pattern: got($URL, ...)
+        - pattern: got.$M($URL, ...)
+        - pattern: needle($M, $URL, ...)
+        - pattern: request($URL, ...)
+        - pattern: http.get($URL, ...)
+        - pattern: https.get($URL, ...)
+        - pattern: http.request($URL, ...)
+        - pattern: https.request($URL, ...)
+        - pattern: superagent.$M($URL)
+        - pattern: puppeteer.$X.goto($URL, ...)
+        - pattern: $PAGE.goto($URL, ...)
+      - focus-metavariable: $URL
+
+- id: ts-js-open-redirect
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: User input controls a redirect (open redirect; chain with OAuth redirect_uri for token theft).
+  metadata: {cwe: "CWE-601", category: open-redirect, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sinks:
+    - pattern: res.redirect(...)
+    - pattern: ctx.redirect(...)
+    - pattern: 'res.writeHead($CODE, {..., Location: $URL, ...})'
+    - pattern: res.setHeader("Location", $URL)
+    - pattern: NextResponse.redirect(...)
+
+- id: ts-js-reflected-xss
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: User input written into an HTTP response without encoding (reflected XSS).
+  metadata: {cwe: "CWE-79", category: xss, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sanitizers:
+    - pattern: escape(...)
+    - pattern: escapeHtml(...)
+    - pattern: he.encode(...)
+    - pattern: DOMPurify.sanitize(...)
+    - pattern: sanitizeHtml(...)
+    - pattern: xss(...)
+    - pattern: encodeURIComponent(...)
+    - pattern: JSON.stringify(...)
+    - pattern: parseInt(...)
+  pattern-sinks:
+    - pattern: res.send(...)
+    - pattern: res.write(...)
+    - pattern: res.end(...)
+    - pattern: ctx.body = $X
+
+- id: ts-js-nosqli
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: Request object passed directly into a MongoDB/Mongoose query (operator injection, e.g. {"$ne":null} login bypass).
+  metadata: {cwe: "CWE-943", category: nosqli, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sanitizers:
+    - pattern: String(...)
+    - pattern: mongoSanitize(...)
+    - pattern: sanitize(...)
+  pattern-sinks:
+    - pattern: $M.find(...)
+    - pattern: $M.findOne(...)
+    - pattern: $M.findOneAndUpdate(...)
+    - pattern: $M.updateOne(...)
+    - pattern: $M.updateMany(...)
+    - pattern: $M.deleteOne(...)
+    - pattern: $M.deleteMany(...)
+    - pattern: $M.countDocuments(...)
+    - pattern: $M.aggregate(...)
+    - pattern: '$M.find({..., $where: $X, ...})'
+
+- id: ts-js-prototype-pollution
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: User input deep-merged into an object (prototype pollution -> auth bypass / RCE gadgets).
+  metadata: {cwe: "CWE-1321", category: prototype-pollution, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sinks:
+    - pattern: _.merge(...)
+    - pattern: _.mergeWith(...)
+    - pattern: _.defaultsDeep(...)
+    - pattern: _.set(...)
+    - pattern: _.setWith(...)
+    - pattern: lodash.merge(...)
+    - pattern: merge(...)
+    - pattern: deepmerge(...)
+    - pattern: extend(true, ...)
+    - pattern: $.extend(true, ...)
+    - pattern: dot.set(...)
+    - pattern: objectPath.set(...)
+    - pattern: setValue(...)
+    - pattern: $OBJ[$K1][$K2] = $V
+
+- id: ts-js-mass-assignment
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Entire request body written to a model (mass assignment -> role/isAdmin/balance tampering).
+  metadata: {cwe: "CWE-915", category: mass-assignment, confidence: MEDIUM}
+  pattern-either:
+    - pattern: new $MODEL(req.body)
+    - pattern: $MODEL.create(req.body)
+    - pattern: $MODEL.insertMany(req.body)
+    - pattern: '$MODEL.update(req.body, ...)'
+    - pattern: '$MODEL.findByIdAndUpdate($ID, req.body, ...)'
+    - pattern: '$MODEL.findOneAndUpdate($Q, req.body, ...)'
+    - pattern: '$MODEL.updateOne($Q, req.body, ...)'
+    - pattern: Object.assign($OBJ, req.body)
+    - pattern: '{...$X, ...req.body}'
+    - pattern: '$PRISMA.$MODEL.create({data: req.body})'
+    - pattern: '$PRISMA.$MODEL.update({..., data: req.body, ...})'
+
+- id: ts-js-redos
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: User input compiled into a RegExp (ReDoS / regex injection).
+  metadata: {cwe: "CWE-1333", category: redos, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sanitizers:
+    - pattern: _.escapeRegExp(...)
+    - pattern: escapeRegExp(...)
+    - pattern: escapeStringRegexp(...)
+  pattern-sinks:
+    - pattern: new RegExp(...)
+    - pattern: RegExp(...)
+
+- id: ts-js-ssti
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: User input compiled as a template (server-side template injection).
+  metadata: {cwe: "CWE-1336", category: ssti, confidence: HIGH}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sinks:
+    - pattern: ejs.render(...)
+    - pattern: pug.render(...)
+    - pattern: pug.compile(...)
+    - pattern: handlebars.compile(...)
+    - pattern: Handlebars.compile(...)
+    - pattern: nunjucks.renderString(...)
+    - pattern: _.template(...)
+    - pattern: doT.template(...)
+    - pattern: mustache.render(...)
+
+- id: ts-js-xxe
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: XML parsed with entity expansion enabled (XXE).
+  metadata: {cwe: "CWE-611", category: xxe, confidence: HIGH}
+  pattern-either:
+    - pattern: 'libxmljs.parseXml($X, {..., noent: true, ...})'
+    - pattern: 'libxmljs.parseXmlString($X, {..., noent: true, ...})'
+    - pattern: 'libxml.parseXml($X, {..., noent: true, ...})'
+    - pattern: 'new DOMParser({..., noent: true, ...})'
+
+- id: ts-js-header-injection
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: User input placed in a response header (header injection).
+  metadata: {cwe: "CWE-113", category: header-injection, confidence: LOW}
+  mode: taint
+  pattern-sources: *jssrc
+  pattern-sinks:
+    - pattern: res.setHeader($K, $V)
+    - pattern: res.set($K, $V)
+    - pattern: res.header($K, $V)
+    - pattern: res.cookie($K, $V, ...)
+
+# ============================================================ PATTERN rules (server)
+- id: ts-js-insecure-deserialization
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: Unsafe deserialization (node-serialize / funcster / yaml.load with JS types -> RCE).
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: MEDIUM}
+  pattern-either:
+    - pattern: serialize.unserialize(...)
+    - pattern: require("node-serialize").unserialize(...)
+    - pattern: funcster.deepDeserialize(...)
+    - pattern: serialijse.deserialize(...)
+    - pattern: 'yaml.load($X, {..., schema: yaml.DEFAULT_FULL_SCHEMA, ...})'
+    - pattern: jsyaml.load(...)
+
+- id: ts-js-jwt-issues
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: JWT verification weakened (decode-without-verify, 'none' alg, or ignoreExpiration).
+  metadata: {cwe: "CWE-347", category: jwt, confidence: HIGH}
+  pattern-either:
+    - pattern: 'jwt.verify($T, $K, {..., algorithms: [..., "none", ...], ...}, ...)'
+    - pattern: 'jwt.verify($T, $K, {..., ignoreExpiration: true, ...}, ...)'
+    - pattern: 'jwt.sign($P, $K, {..., algorithm: "none", ...}, ...)'
+    - patterns:
+      - pattern: jwt.decode($T, ...)
+      - pattern-inside: |
+          function $F(...) { ... }
+
+- id: ts-js-jwt-hardcoded-secret
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: JWT signed/verified with a hardcoded secret (token forgery).
+  metadata: {cwe: "CWE-798", category: hardcoded-secret, confidence: MEDIUM}
+  pattern-either:
+    - pattern: jwt.sign($P, "...", ...)
+    - pattern: jwt.verify($T, "...", ...)
+    - pattern: 'expressJwt({..., secret: "...", ...})'
+    - pattern: 'session({..., secret: "...", ...})'
+    - pattern: cookieParser("...")
+
+- id: ts-js-cors-misconfig
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: CORS reflects any origin with credentials (cross-origin account data theft).
+  metadata: {cwe: "CWE-942", category: cors, confidence: MEDIUM}
+  pattern-either:
+    - pattern: 'cors({..., origin: true, ..., credentials: true, ...})'
+    - pattern: 'cors({..., credentials: true, ..., origin: true, ...})'
+    - pattern: 'cors({..., origin: "*", ..., credentials: true, ...})'
+    - pattern: res.setHeader("Access-Control-Allow-Origin", req.headers.origin)
+    - pattern: res.header("Access-Control-Allow-Origin", req.headers.origin)
+    - pattern: res.set("Access-Control-Allow-Origin", req.headers.origin)
+
+- id: ts-js-insecure-cookie
+  languages: [javascript, typescript]
+  severity: INFO
+  message: Cookie/session flags weakened (httpOnly/secure false).
+  metadata: {cwe: "CWE-614", category: cookie, confidence: MEDIUM}
+  pattern-either:
+    - pattern: 'res.cookie($N, $V, {..., httpOnly: false, ...})'
+    - pattern: 'res.cookie($N, $V, {..., secure: false, ...})'
+    - pattern: 'session({..., cookie: {..., httpOnly: false, ...}, ...})'
+    - pattern: 'session({..., cookie: {..., secure: false, ...}, ...})'
+
+- id: ts-js-tls-disabled
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: TLS certificate validation disabled (MITM).
+  metadata: {cwe: "CWE-295", category: tls, confidence: HIGH}
+  pattern-either:
+    - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    - pattern: '{..., rejectUnauthorized: false, ...}'
+    - pattern: 'new https.Agent({..., rejectUnauthorized: false, ...})'
+
+- id: ts-js-weak-crypto
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Weak hash/cipher (MD5, SHA1, DES, RC4, ECB) — critical if used for passwords/tokens/signatures.
+  metadata: {cwe: "CWE-327", category: weak-crypto, confidence: LOW}
+  pattern-either:
+    - pattern: crypto.createHash("md5")
+    - pattern: crypto.createHash("sha1")
+    - pattern: crypto.createCipher(...)
+    - pattern: crypto.createCipheriv("des-ecb", ...)
+    - pattern: crypto.createCipheriv("aes-128-ecb", ...)
+    - pattern: crypto.createCipheriv("aes-256-ecb", ...)
+    - pattern: crypto.createCipheriv("rc4", ...)
+    - pattern: md5(...)
+    - pattern: sha1(...)
+
+- id: ts-js-insecure-random
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Math.random() used for a security value (predictable tokens/OTP/reset codes).
+  metadata: {cwe: "CWE-338", category: insecure-random, confidence: MEDIUM}
+  patterns:
+    - pattern: Math.random()
+    - pattern-either:
+      - pattern-inside: |
+          function $F(...) { ... }
+      - pattern-inside: |
+          $F = (...) => { ... }
+      - pattern-inside: |
+          const $F = (...) => { ... }
+    - metavariable-regex:
+        metavariable: $F
+        regex: (?i).*(token|otp|code|secret|password|reset|session|nonce|salt|key|verify|invite|coupon|id).*
+
+- id: ts-js-timing-compare
+  languages: [javascript, typescript]
+  severity: INFO
+  message: Secret compared with ===/== (timing attack). Use crypto.timingSafeEqual.
+  metadata: {cwe: "CWE-208", category: weak-crypto, confidence: LOW}
+  patterns:
+    - pattern-either:
+      - pattern: $A === $B
+      - pattern: $A == $B
+    - metavariable-regex:
+        metavariable: $A
+        regex: (?i).*(token|signature|hmac|secret|apikey|api_key|digest|hash).*
+
+- id: ts-js-hardcoded-credential
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: Hardcoded credential/secret in source.
+  metadata: {cwe: "CWE-798", category: hardcoded-secret, confidence: LOW}
+  patterns:
+    - pattern-either:
+      - pattern: const $K = "$V"
+      - pattern: let $K = "$V"
+      - pattern: 'var $K = "$V"'
+      - pattern: '{..., $K: "$V", ...}'
+    - metavariable-regex:
+        metavariable: $K
+        regex: (?i)^(password|passwd|secret|secretkey|secret_key|apikey|api_key|accesskey|access_key|privatekey|private_key|authtoken|auth_token|clientsecret|client_secret|jwtsecret|jwt_secret)$
+    - metavariable-regex:
+        metavariable: $V
+        regex: ^.{6,}$
+
+- id: ts-js-express-no-helmet-xpoweredby
+  languages: [javascript, typescript]
+  severity: INFO
+  message: Express debug/stack traces or error details sent to clients (information disclosure).
+  metadata: {cwe: "CWE-209", category: info-disclosure, confidence: LOW}
+  pattern-either:
+    - pattern: res.send($ERR.stack)
+    - pattern: res.json($ERR.stack)
+    - pattern: 'res.status($C).json({..., stack: $ERR.stack, ...})'
+    - pattern: res.status($C).send($ERR.stack)
+
+- id: ts-js-graphql-introspection
+  languages: [javascript, typescript]
+  severity: INFO
+  message: GraphQL introspection/playground enabled in production config (schema disclosure; then hunt for IDOR/auth gaps in resolvers).
+  metadata: {cwe: "CWE-200", category: info-disclosure, confidence: LOW}
+  pattern-either:
+    - pattern: 'new ApolloServer({..., introspection: true, ...})'
+    - pattern: 'new ApolloServer({..., playground: true, ...})'
+    - pattern: 'graphqlHTTP({..., graphiql: true, ...})'
+
+# ============================================================ CLIENT-SIDE / DOM
+- id: ts-js-dom-xss
+  languages: [javascript, typescript]
+  severity: ERROR
+  message: Attacker-controllable browser source reaches an HTML/JS sink (DOM XSS).
+  metadata: {cwe: "CWE-79", category: dom-xss, confidence: MEDIUM}
+  mode: taint
+  pattern-sources:
+    - pattern: location.hash
+    - pattern: location.search
+    - pattern: location.href
+    - pattern: window.location.hash
+    - pattern: window.location.search
+    - pattern: window.location.href
+    - pattern: document.location
+    - pattern: document.URL
+    - pattern: document.documentURI
+    - pattern: document.referrer
+    - pattern: document.cookie
+    - pattern: window.name
+    - pattern: new URLSearchParams(...).get(...)
+    - pattern: $E.data
+    - pattern: localStorage.getItem(...)
+    - pattern: sessionStorage.getItem(...)
+    - pattern: useSearchParams()
+    - pattern: $ROUTER.query
+  pattern-sanitizers:
+    - pattern: DOMPurify.sanitize(...)
+    - pattern: encodeURIComponent(...)
+    - pattern: escapeHtml(...)
+    - pattern: parseInt(...)
+  pattern-sinks:
+    - pattern: $EL.innerHTML = $X
+    - pattern: $EL.outerHTML = $X
+    - pattern: $EL.insertAdjacentHTML($POS, $X)
+    - pattern: document.write(...)
+    - pattern: document.writeln(...)
+    - pattern: eval(...)
+    - pattern: setTimeout($X, ...)
+    - pattern: new Function(...)
+    - pattern: location.href = $X
+    - pattern: window.location.href = $X
+    - pattern: location.assign(...)
+    - pattern: location.replace(...)
+    - pattern: window.open(...)
+    - pattern: $EL.src = $X
+    - pattern: $EL.setAttribute("href", $X)
+    - pattern: $EL.setAttribute("src", $X)
+    - pattern: $(...).html(...)
+    - pattern: $(...).append(...)
+    - pattern: $(...).prepend(...)
+    - pattern: $(...).after(...)
+    - pattern: $(...).before(...)
+    - pattern: jQuery(...).html(...)
+    - pattern: $($X)
+    - pattern: '<$C dangerouslySetInnerHTML={{__html: $X}} />'
+    - pattern: '<a href={$X}>...</a>'
+    - pattern: '<iframe src={$X} />'
+
+- id: ts-js-dangerously-set-inner-html
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: dangerouslySetInnerHTML used — verify the HTML is sanitized (stored/DOM XSS).
+  metadata: {cwe: "CWE-79", category: xss, confidence: LOW}
+  patterns:
+    - pattern: '<$C dangerouslySetInnerHTML={{__html: $X}} />'
+    - pattern-not: '<$C dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(...)}} />'
+
+- id: ts-js-vue-v-html
+  languages: [generic]
+  paths: {include: ["*.vue", "*.html"]}
+  severity: WARNING
+  message: v-html / ng-bind-html / [innerHTML] renders raw HTML (XSS if user-controlled).
+  metadata: {cwe: "CWE-79", category: xss, confidence: LOW}
+  pattern-either:
+    - pattern: v-html="$X"
+    - pattern: ng-bind-html="$X"
+    - pattern: '[innerHTML]="$X"'
+
+- id: ts-js-postmessage-no-origin
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: message event handler does not check event.origin (cross-origin postMessage abuse -> DOM XSS / token leak).
+  metadata: {cwe: "CWE-346", category: postmessage, confidence: MEDIUM}
+  patterns:
+    - pattern-either:
+      - pattern: window.addEventListener("message", $H, ...)
+      - pattern: addEventListener("message", $H, ...)
+      - pattern: self.addEventListener("message", $H, ...)
+      - pattern: window.onmessage = $H
+    - metavariable-regex:
+        metavariable: $H
+        regex: '^(?![\s\S]*\.origin)[\s\S]*$'
+
+- id: ts-js-postmessage-wildcard
+  languages: [javascript, typescript]
+  severity: WARNING
+  message: postMessage with targetOrigin "*" (sensitive data may leak to any embedding/opened window).
+  metadata: {cwe: "CWE-345", category: postmessage, confidence: MEDIUM}
+  pattern: $W.postMessage($MSG, "*")
+
+- id: ts-js-token-in-storage
+  languages: [javascript, typescript]
+  severity: INFO
+  message: Auth token stored in localStorage/sessionStorage (any XSS = account takeover).
+  metadata: {cwe: "CWE-922", category: info-disclosure, confidence: LOW}
+  patterns:
+    - pattern-either:
+      - pattern: localStorage.setItem($K, $V)
+      - pattern: sessionStorage.setItem($K, $V)
+    - metavariable-regex:
+        metavariable: $K
+        regex: (?i).*(token|jwt|auth|session|access|refresh|secret).*

@@ -1,0 +1,308 @@
+rules:
+- id: ts-php-sqli
+  languages: [php]
+  severity: ERROR
+  message: User input reaches a SQL query (SQL injection).
+  metadata: {cwe: "CWE-89", category: sqli, confidence: HIGH}
+  mode: taint
+  pattern-sources: &phpsrc
+    - pattern: $_GET
+    - pattern: $_POST
+    - pattern: $_REQUEST
+    - pattern: $_COOKIE
+    - pattern: $_FILES
+    - pattern: $_SERVER
+    - pattern: getenv(...)
+    - pattern: file_get_contents("php://input")
+    - pattern: $request->input(...)
+    - pattern: $request->get(...)
+    - pattern: $request->query(...)
+    - pattern: $request->post(...)
+    - pattern: $request->all()
+    - pattern: $request->query->get(...)
+    - pattern: $request->request->get(...)
+    - pattern: $this->input->get(...)
+    - pattern: $this->input->post(...)
+    - pattern: Input::get(...)
+    - pattern: request(...)
+  pattern-sanitizers: &phpsan
+    - pattern: intval(...)
+    - pattern: (int) $X
+    - pattern: floatval(...)
+    - pattern: is_numeric(...)
+  pattern-sinks:
+    - pattern: mysql_query(...)
+    - pattern: mysqli_query($C, $Q, ...)
+    - pattern: mysqli_multi_query(...)
+    - pattern: pg_query(...)
+    - pattern: sqlite_query(...)
+    - pattern: $DB->query(...)
+    - pattern: $DB->exec(...)
+    - pattern: $DB->multi_query(...)
+    - pattern: $DB->rawQuery(...)
+    - pattern: DB::raw(...)
+    - pattern: DB::select(...)
+    - pattern: DB::statement(...)
+    - pattern: $Q->whereRaw(...)
+    - pattern: $Q->orderByRaw(...)
+    - pattern: $Q->selectRaw(...)
+    - pattern: $Q->havingRaw(...)
+    - pattern: $DB->createQuery(...)
+
+- id: ts-php-cmdi
+  languages: [php]
+  severity: ERROR
+  message: User input reaches an OS command (command injection).
+  metadata: {cwe: "CWE-78", category: cmdi, confidence: HIGH}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sanitizers:
+    - pattern: escapeshellarg(...)
+    - pattern: intval(...)
+  pattern-sinks:
+    - pattern: system(...)
+    - pattern: exec(...)
+    - pattern: shell_exec(...)
+    - pattern: passthru(...)
+    - pattern: popen(...)
+    - pattern: proc_open(...)
+    - pattern: pcntl_exec(...)
+    - pattern: mail($A, $B, $C, $D, $E)
+
+- id: ts-php-code-injection
+  languages: [php]
+  severity: ERROR
+  message: User input reaches eval/assert/create_function/dynamic call (RCE).
+  metadata: {cwe: "CWE-94", category: code-injection, confidence: HIGH}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sinks:
+    - pattern: eval(...)
+    - pattern: assert(...)
+    - pattern: create_function(...)
+    - pattern: call_user_func(...)
+    - pattern: call_user_func_array(...)
+    - patterns:
+      - pattern: preg_replace($P, ...)
+      - focus-metavariable: $P
+    - patterns:
+      - pattern: array_map($F, ...)
+      - focus-metavariable: $F
+
+- id: ts-php-file-inclusion
+  languages: [php]
+  severity: ERROR
+  message: User input in include/require (LFI/RFI -> RCE via log poisoning, php://filter, phar).
+  metadata: {cwe: "CWE-98", category: lfi, confidence: HIGH}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sanitizers:
+    - pattern: basename(...)
+  pattern-sinks:
+    - pattern: include $X;
+    - pattern: include_once $X;
+    - pattern: require $X;
+    - pattern: require_once $X;
+
+- id: ts-php-path-traversal
+  languages: [php]
+  severity: ERROR
+  message: User input in a filesystem function (path traversal / arbitrary file read/write/delete, phar://).
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sanitizers:
+    - pattern: basename(...)
+    - pattern: intval(...)
+  pattern-sinks:
+    - pattern: file_get_contents(...)
+    - pattern: file_put_contents(...)
+    - pattern: fopen(...)
+    - pattern: readfile(...)
+    - pattern: file(...)
+    - pattern: unlink(...)
+    - pattern: copy(...)
+    - pattern: rename(...)
+    - pattern: move_uploaded_file(...)
+    - pattern: file_exists(...)
+    - pattern: is_file(...)
+    - pattern: filesize(...)
+    - pattern: getimagesize(...)
+    - pattern: rmdir(...)
+    - pattern: mkdir(...)
+    - pattern: Storage::get(...)
+    - pattern: Storage::download(...)
+    - pattern: response()->download(...)
+    - pattern: response()->file(...)
+
+- id: ts-php-ssrf
+  languages: [php]
+  severity: ERROR
+  message: User input controls a server-side request URL (SSRF).
+  metadata: {cwe: "CWE-918", category: ssrf, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sinks:
+    - pattern: curl_init(...)
+    - pattern: curl_setopt($CH, CURLOPT_URL, $URL)
+    - pattern: Http::get(...)
+    - pattern: Http::post(...)
+    - pattern: $CLIENT->request($M, $URL, ...)
+    - pattern: $CLIENT->get(...)
+    - pattern: fsockopen(...)
+    - pattern: get_headers(...)
+    - pattern: simplexml_load_file(...)
+
+- id: ts-php-xss
+  languages: [php]
+  severity: WARNING
+  message: User input echoed without encoding (reflected XSS).
+  metadata: {cwe: "CWE-79", category: xss, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sanitizers:
+    - pattern: htmlspecialchars(...)
+    - pattern: htmlentities(...)
+    - pattern: strip_tags(...)
+    - pattern: intval(...)
+    - pattern: json_encode(...)
+    - pattern: e(...)
+    - pattern: esc_html(...)
+    - pattern: esc_attr(...)
+    - pattern: esc_url(...)
+    - pattern: wp_kses(...)
+  pattern-sinks:
+    - pattern: echo ...;
+    - pattern: print(...)
+    - pattern: printf(...)
+    - pattern: vprintf(...)
+    - pattern: die(...)
+    - pattern: exit(...)
+
+- id: ts-php-open-redirect
+  languages: [php]
+  severity: WARNING
+  message: User input in a Location header / redirect (open redirect).
+  metadata: {cwe: "CWE-601", category: open-redirect, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sinks:
+    - pattern: header(...)
+    - pattern: redirect(...)
+    - pattern: redirect()->to(...)
+    - pattern: wp_redirect(...)
+
+- id: ts-php-unserialize
+  languages: [php]
+  severity: ERROR
+  message: unserialize() on user input (PHP object injection -> RCE via POP gadget chains; try phpggc).
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: HIGH}
+  mode: taint
+  pattern-sources: *phpsrc
+  pattern-sinks:
+    - pattern: unserialize(...)
+    - pattern: maybe_unserialize(...)
+    - pattern: yaml_parse(...)
+
+- id: ts-php-unserialize-any
+  languages: [php]
+  severity: WARNING
+  message: unserialize() without allowed_classes=false — check whether the input can be attacker-controlled (cookies, DB, cache).
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: LOW}
+  patterns:
+    - pattern: unserialize($X)
+    - pattern-not: unserialize($X, ["allowed_classes" => false])
+
+- id: ts-php-xxe
+  languages: [php]
+  severity: ERROR
+  message: XML parsed with LIBXML_NOENT / DTD loading (XXE).
+  metadata: {cwe: "CWE-611", category: xxe, confidence: HIGH}
+  pattern-either:
+    - pattern: simplexml_load_string($X, $C, <... LIBXML_NOENT ...>)
+    - pattern: $DOM->loadXML($X, <... LIBXML_NOENT ...>)
+    - pattern: $DOM->loadXML($X, <... LIBXML_DTDLOAD ...>)
+    - pattern: libxml_disable_entity_loader(false)
+
+- id: ts-php-extract
+  languages: [php]
+  severity: ERROR
+  message: extract()/parse_str() on user input (variable overwrite -> auth bypass).
+  metadata: {cwe: "CWE-621", category: mass-assignment, confidence: HIGH}
+  pattern-either:
+    - pattern: extract($_GET)
+    - pattern: extract($_POST)
+    - pattern: extract($_REQUEST)
+    - pattern: parse_str($X)
+    - pattern: $$VAR = $X
+
+- id: ts-php-mass-assignment
+  languages: [php]
+  severity: WARNING
+  message: Full request passed to model create/update/fill (mass assignment -> role/is_admin tampering). Check $fillable/$guarded.
+  metadata: {cwe: "CWE-915", category: mass-assignment, confidence: MEDIUM}
+  pattern-either:
+    - pattern: $M::create($request->all())
+    - pattern: $M->update($request->all())
+    - pattern: $M->fill($request->all())
+    - pattern: $M::create(request()->all())
+    - pattern: $M->update(request()->all())
+    - pattern: $M->forceFill(...)
+
+- id: ts-php-loose-comparison
+  languages: [php]
+  severity: WARNING
+  message: Loose comparison (==) on a secret/hash (type juggling auth bypass, e.g. 0e magic hashes).
+  metadata: {cwe: "CWE-697", category: auth, confidence: MEDIUM}
+  patterns:
+    - pattern-either:
+      - pattern: $A == $B
+      - pattern: $A != $B
+    - metavariable-regex:
+        metavariable: $A
+        regex: (?i).*(pass|hash|token|secret|sig|key|otp|code).*
+
+- id: ts-php-strcmp-bypass
+  languages: [php]
+  severity: WARNING
+  message: strcmp() result compared loosely (array input returns NULL == 0 -> auth bypass).
+  metadata: {cwe: "CWE-697", category: auth, confidence: MEDIUM}
+  pattern-either:
+    - pattern: strcmp(...) == 0
+    - pattern: '!strcmp(...)'
+
+- id: ts-php-weak-crypto
+  languages: [php]
+  severity: WARNING
+  message: Weak hashing / randomness for security values (md5/sha1/rand/mt_rand/uniqid).
+  metadata: {cwe: "CWE-327", category: weak-crypto, confidence: LOW}
+  pattern-either:
+    - pattern: md5(...)
+    - pattern: sha1(...)
+    - pattern: crypt(...)
+    - pattern: rand(...)
+    - pattern: mt_rand(...)
+    - pattern: uniqid(...)
+    - pattern: str_shuffle(...)
+
+- id: ts-php-insecure-upload
+  languages: [php]
+  severity: WARNING
+  message: Uploaded file moved using the client-supplied name/extension (webshell upload).
+  metadata: {cwe: "CWE-434", category: file-upload, confidence: MEDIUM}
+  pattern-either:
+    - pattern: move_uploaded_file($TMP, <... $_FILES[$F]["name"] ...>)
+    - pattern: $FILE->move($DIR, $FILE->getClientOriginalName())
+    - pattern: $FILE->storeAs($DIR, $FILE->getClientOriginalName(), ...)
+
+- id: ts-php-debug-info
+  languages: [php]
+  severity: INFO
+  message: phpinfo()/debug output/error display enabled (information disclosure).
+  metadata: {cwe: "CWE-200", category: info-disclosure, confidence: HIGH}
+  pattern-either:
+    - pattern: phpinfo()
+    - pattern: ini_set("display_errors", 1)
+    - pattern: ini_set("display_errors", "1")
+    - pattern: error_reporting(E_ALL)
+    - pattern: var_dump(...)

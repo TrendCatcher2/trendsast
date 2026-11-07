@@ -1,0 +1,407 @@
+rules:
+- id: ts-java-sqli
+  languages: [java]
+  severity: ERROR
+  message: User input concatenated into SQL/HQL/JPQL (SQL injection).
+  metadata: {cwe: "CWE-89", category: sqli, confidence: HIGH}
+  mode: taint
+  pattern-sources: &javasrc
+    - patterns:
+      - pattern-inside: |
+          $RET $M(..., @$ANNO(...) $T $SRC, ...) { ... }
+      - metavariable-regex: {metavariable: $ANNO, regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|QueryParam|PathParam|FormParam|HeaderParam|ModelAttribute)$}
+      - pattern: $SRC
+    - patterns:
+      - pattern-inside: |
+          $RET $M(..., @$ANNO $T $SRC, ...) { ... }
+      - metavariable-regex: {metavariable: $ANNO, regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|QueryParam|PathParam|FormParam|HeaderParam|ModelAttribute)$}
+      - pattern: $SRC
+    - pattern: (HttpServletRequest $R).getParameter(...)
+    - pattern: (HttpServletRequest $R).getParameterValues(...)
+    - pattern: (HttpServletRequest $R).getParameterMap()
+    - pattern: (HttpServletRequest $R).getHeader(...)
+    - pattern: (HttpServletRequest $R).getCookies()
+    - pattern: (HttpServletRequest $R).getQueryString()
+    - pattern: (HttpServletRequest $R).getRequestURI()
+    - pattern: (HttpServletRequest $R).getInputStream()
+    - pattern: (HttpServletRequest $R).getReader()
+    - pattern: (HttpServletRequest $R).getPathInfo()
+  pattern-sanitizers: &javasan
+    - pattern: Integer.parseInt(...)
+    - pattern: Long.parseLong(...)
+    - pattern: UUID.fromString(...)
+  pattern-sinks:
+    - pattern: (java.sql.Statement $S).executeQuery(...)
+    - pattern: (java.sql.Statement $S).execute(...)
+    - pattern: (java.sql.Statement $S).executeUpdate(...)
+    - pattern: (java.sql.Statement $S).addBatch(...)
+    - pattern: (java.sql.Connection $C).prepareStatement(...)
+    - pattern: $STMT.executeQuery(...)
+    - pattern: $STMT.executeUpdate(...)
+    - pattern: $EM.createQuery(...)
+    - pattern: $EM.createNativeQuery(...)
+    - pattern: $SESSION.createQuery(...)
+    - pattern: $SESSION.createSQLQuery(...)
+    - pattern: $JDBC.queryForObject(...)
+    - pattern: $JDBC.queryForList(...)
+    - pattern: $JDBC.query(...)
+    - pattern: $JDBC.update(...)
+    - pattern: $JDBC.execute(...)
+
+- id: ts-java-sql-concat
+  languages: [java]
+  severity: ERROR
+  message: SQL query built by string concatenation or format. If any concatenated part is attacker-controlled (possibly via another method), this is SQL injection. Use PreparedStatement with ? placeholders.
+  metadata: {cwe: "CWE-89", category: sqli, confidence: MEDIUM}
+  patterns:
+    - pattern-either:
+      - patterns:
+        - pattern: $S.$EXEC(<... "..." + $X ...>, ...)
+        - metavariable-regex: {metavariable: $EXEC, regex: '^(executeQuery|executeUpdate|execute|addBatch|prepareStatement|createQuery|createNativeQuery|createSQLQuery|queryForObject|queryForList|query|update)$'}
+      - patterns:
+        - pattern: $S.$EXEC(<... String.format("...", ...) ...>, ...)
+        - metavariable-regex: {metavariable: $EXEC, regex: '^(executeQuery|executeUpdate|execute|addBatch|prepareStatement|createQuery|createNativeQuery|createSQLQuery)$'}
+      - patterns:
+        - pattern-either:
+          - pattern: |
+              $T $Q = <... "..." + $X ...>;
+              ...
+              $S.$EXEC($Q, ...);
+          - pattern: |
+              $T $Q = "...";
+              ...
+              $Q += $X;
+              ...
+              $S.$EXEC($Q, ...);
+        - metavariable-regex: {metavariable: $EXEC, regex: '^(executeQuery|executeUpdate|execute|addBatch|prepareStatement|createQuery|createNativeQuery|createSQLQuery)$'}
+        - metavariable-regex: {metavariable: $Q, regex: '(?i).*(query|sql|stmt|statement|select|cmd).*'}
+
+- id: ts-java-cmdi-shell
+  languages: [java]
+  severity: ERROR
+  message: User input reaches a command run THROUGH A SHELL (sh -c / bash -c / cmd /c) - full command injection, ; | && $() all work.
+  metadata: {cwe: "CWE-78", category: cmdi, confidence: HIGH}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - patterns:
+      - pattern-either:
+        - pattern: 'Runtime.getRuntime().exec(new String[]{$SH, $FLAG, $CMD}, ...)'
+        - pattern: '(Runtime $R).exec(new String[]{$SH, $FLAG, $CMD}, ...)'
+        - pattern: new ProcessBuilder($SH, $FLAG, $CMD)
+        - pattern: 'new ProcessBuilder(new String[]{$SH, $FLAG, $CMD})'
+        - pattern: (ProcessBuilder $P).command($SH, $FLAG, $CMD)
+      - metavariable-regex:
+          metavariable: $SH
+          regex: '^"(/bin/|/usr/bin/)?(sh|bash|zsh|dash|ksh|cmd|cmd\.exe|powershell|powershell\.exe|pwsh)"$'
+      - focus-metavariable: $CMD
+
+- id: ts-java-argument-injection
+  languages: [java]
+  severity: WARNING
+  message: User input reaches process execution WITHOUT a shell. Runtime.exec(String) splits on spaces and runs the binary directly, so ; | && do not work - this is argument injection (extra flags/options to the program), not full command injection. Check what the target binary's options allow (e.g. git --upload-pack, curl -o, tar --to-command, find -exec).
+  metadata: {cwe: "CWE-88", category: argument-injection, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - patterns:
+      - pattern-either:
+        - pattern: Runtime.getRuntime().exec(...)
+        - pattern: (Runtime $R).exec(...)
+        - pattern: new ProcessBuilder(...)
+        - pattern: (ProcessBuilder $P).command(...)
+      - pattern-not: 'Runtime.getRuntime().exec(new String[]{"sh", ...}, ...)'
+      - pattern-not: 'Runtime.getRuntime().exec(new String[]{"/bin/sh", ...}, ...)'
+      - pattern-not: 'Runtime.getRuntime().exec(new String[]{"bash", ...}, ...)'
+      - pattern-not: 'Runtime.getRuntime().exec(new String[]{"/bin/bash", ...}, ...)'
+      - pattern-not: 'Runtime.getRuntime().exec(new String[]{"cmd", ...}, ...)'
+      - pattern-not: 'Runtime.getRuntime().exec(new String[]{"cmd.exe", ...}, ...)'
+      - pattern-not: new ProcessBuilder("sh", ...)
+      - pattern-not: new ProcessBuilder("/bin/sh", ...)
+      - pattern-not: new ProcessBuilder("bash", ...)
+      - pattern-not: new ProcessBuilder("/bin/bash", ...)
+      - pattern-not: new ProcessBuilder("cmd", ...)
+      - pattern-not: new ProcessBuilder("cmd.exe", ...)
+
+- id: ts-java-code-injection
+  languages: [java]
+  severity: ERROR
+  message: User input evaluated as an expression/script (SpEL/OGNL/EL/ScriptEngine/Groovy -> RCE).
+  metadata: {cwe: "CWE-94", category: code-injection, confidence: HIGH}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - pattern: (ExpressionParser $P).parseExpression(...)
+    - pattern: $PARSER.parseExpression(...)
+    - pattern: (ScriptEngine $E).eval(...)
+    - pattern: $ENGINE.eval(...)
+    - pattern: Ognl.getValue(...)
+    - pattern: Ognl.parseExpression(...)
+    - pattern: (ELProcessor $E).eval(...)
+    - pattern: $FACTORY.createValueExpression(...)
+    - pattern: new GroovyShell(...).evaluate(...)
+    - pattern: (GroovyShell $G).evaluate(...)
+    - pattern: Class.forName(...)
+    - pattern: $CTX.buildConstraintViolationWithTemplate(...)
+
+- id: ts-java-path-traversal
+  languages: [java]
+  severity: ERROR
+  message: User input in a file path (path traversal / arbitrary file read/write).
+  metadata: {cwe: "CWE-22", category: path-traversal, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sanitizers:
+    - pattern: FilenameUtils.getName(...)
+    - pattern: Integer.parseInt(...)
+  pattern-sinks:
+    - pattern: new File(...)
+    - pattern: new FileInputStream(...)
+    - pattern: new FileOutputStream(...)
+    - pattern: new FileReader(...)
+    - pattern: new FileWriter(...)
+    - pattern: Paths.get(...)
+    - pattern: Path.of(...)
+    - pattern: Files.$M(...)
+    - pattern: new ClassPathResource(...)
+    - pattern: new FileSystemResource(...)
+    - pattern: $LOADER.getResource(...)
+
+- id: ts-java-ssrf
+  languages: [java]
+  severity: ERROR
+  message: User input controls a server-side request URL (SSRF).
+  metadata: {cwe: "CWE-918", category: ssrf, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - pattern: new URL(...)
+    - pattern: URI.create(...)
+    - pattern: new URI(...)
+    - pattern: (RestTemplate $R).$M(...)
+    - pattern: $REST.getForObject(...)
+    - pattern: $REST.getForEntity(...)
+    - pattern: $REST.postForObject(...)
+    - pattern: $REST.exchange(...)
+    - pattern: $WEB.get().uri(...)
+    - pattern: HttpRequest.newBuilder(...)
+    - pattern: new HttpGet(...)
+    - pattern: new HttpPost(...)
+    - pattern: Jsoup.connect(...)
+
+- id: ts-java-open-redirect
+  languages: [java]
+  severity: WARNING
+  message: User input in a redirect (open redirect).
+  metadata: {cwe: "CWE-601", category: open-redirect, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - pattern: (HttpServletResponse $R).sendRedirect(...)
+    - pattern: $RESP.sendRedirect(...)
+    - pattern: new RedirectView(...)
+    - pattern: new ModelAndView("redirect:" + $X)
+    - pattern: '"redirect:" + $X'
+
+- id: ts-java-xss
+  languages: [java]
+  severity: WARNING
+  message: User input written to the response writer (reflected XSS).
+  metadata: {cwe: "CWE-79", category: xss, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sanitizers:
+    - pattern: StringEscapeUtils.escapeHtml4(...)
+    - pattern: HtmlUtils.htmlEscape(...)
+    - pattern: Encode.forHtml(...)
+    - pattern: ESAPI.encoder().encodeForHTML(...)
+  pattern-sinks:
+    - pattern: (HttpServletResponse $R).getWriter().print(...)
+    - pattern: (HttpServletResponse $R).getWriter().println(...)
+    - pattern: (HttpServletResponse $R).getWriter().write(...)
+    - pattern: (PrintWriter $W).print(...)
+    - pattern: (PrintWriter $W).println(...)
+    - pattern: (PrintWriter $W).write(...)
+
+- id: ts-java-ldapi
+  languages: [java]
+  severity: ERROR
+  message: User input in an LDAP search filter (LDAP injection).
+  metadata: {cwe: "CWE-90", category: ldapi, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - pattern: (DirContext $C).search(...)
+    - pattern: (InitialDirContext $C).search(...)
+    - pattern: $LDAP.search(...)
+
+- id: ts-java-xpath-injection
+  languages: [java]
+  severity: WARNING
+  message: User input in an XPath expression (XPath injection).
+  metadata: {cwe: "CWE-643", category: xpath-injection, confidence: MEDIUM}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - pattern: (XPath $X).evaluate(...)
+    - pattern: (XPath $X).compile(...)
+
+- id: ts-java-log4shell-style
+  languages: [java]
+  severity: WARNING
+  message: User input logged (log injection; JNDI lookup RCE on vulnerable log4j 2.0-2.14.1).
+  metadata: {cwe: "CWE-117", category: log-injection, confidence: LOW}
+  mode: taint
+  pattern-sources: *javasrc
+  pattern-sinks:
+    - pattern: $LOG.info(...)
+    - pattern: $LOG.error(...)
+    - pattern: $LOG.warn(...)
+    - pattern: $LOG.debug(...)
+
+- id: ts-java-deserialization
+  languages: [java]
+  severity: ERROR
+  message: Unsafe Java deserialization (ObjectInputStream/XMLDecoder/XStream/Jackson default typing/SnakeYAML -> RCE via gadget chains; try ysoserial).
+  metadata: {cwe: "CWE-502", category: deserialization, confidence: MEDIUM}
+  pattern-either:
+    - pattern: new ObjectInputStream(...).readObject()
+    - pattern: (ObjectInputStream $O).readObject()
+    - pattern: (ObjectInputStream $O).readUnshared()
+    - pattern: new XMLDecoder(...)
+    - pattern: (XStream $X).fromXML(...)
+    - pattern: (ObjectMapper $M).enableDefaultTyping(...)
+    - pattern: (ObjectMapper $M).activateDefaultTyping(...)
+    - pattern: '@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS, ...)'
+    - pattern: new Yaml().load(...)
+    - pattern: (Yaml $Y).load(...)
+    - pattern: JSON.parseObject(...)
+    - pattern: (Kryo $K).readClassAndObject(...)
+    - pattern: SerializationUtils.deserialize(...)
+
+- id: ts-java-xxe
+  languages: [java]
+  severity: ERROR
+  message: XML parser factory created without disabling DTDs/external entities (XXE).
+  metadata: {cwe: "CWE-611", category: xxe, confidence: MEDIUM}
+  patterns:
+    - pattern-either:
+      - pattern: DocumentBuilderFactory.newInstance()
+      - pattern: SAXParserFactory.newInstance()
+      - pattern: XMLInputFactory.newInstance()
+      - pattern: XMLInputFactory.newFactory()
+      - pattern: TransformerFactory.newInstance()
+      - pattern: SchemaFactory.newInstance(...)
+      - pattern: new SAXReader()
+      - pattern: new SAXBuilder()
+      - pattern: XMLReaderFactory.createXMLReader()
+    - pattern-not-inside: |
+        $F = $FACTORY.newInstance();
+        ...
+        $F.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+    - pattern-not-inside: |
+        $F = $FACTORY.newInstance();
+        ...
+        $F.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+    - pattern-not-inside: |
+        $F = $FACTORY.newInstance();
+        ...
+        $F.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+    - pattern-not-inside: |
+        $F = $FACTORY.newInstance();
+        ...
+        $F.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+
+- id: ts-java-weak-crypto
+  languages: [java]
+  severity: WARNING
+  message: Weak hash/cipher/mode (MD5, SHA1, DES, RC4, ECB, NoPadding RSA).
+  metadata: {cwe: "CWE-327", category: weak-crypto, confidence: LOW}
+  pattern-either:
+    - pattern: MessageDigest.getInstance("MD5")
+    - pattern: MessageDigest.getInstance("SHA1")
+    - pattern: MessageDigest.getInstance("SHA-1")
+    - pattern: DigestUtils.md5Hex(...)
+    - pattern: DigestUtils.sha1Hex(...)
+    - pattern: Cipher.getInstance("DES")
+    - pattern: Cipher.getInstance("AES")
+    - pattern: Cipher.getInstance("RC4")
+    - pattern: Cipher.getInstance("AES/ECB/PKCS5Padding")
+    - pattern: Cipher.getInstance("DESede/ECB/PKCS5Padding")
+    - pattern: Cipher.getInstance("RSA/ECB/NoPadding")
+
+- id: ts-java-insecure-random
+  languages: [java]
+  severity: WARNING
+  message: java.util.Random / Math.random used — predictable if used for tokens/OTP/session IDs.
+  metadata: {cwe: "CWE-338", category: insecure-random, confidence: LOW}
+  pattern-either:
+    - pattern: new java.util.Random(...)
+    - pattern: new Random(...)
+    - pattern: Math.random()
+    - pattern: RandomStringUtils.random(...)
+    - pattern: RandomStringUtils.randomAlphanumeric(...)
+
+- id: ts-java-trust-all
+  languages: [java]
+  severity: ERROR
+  message: TLS validation disabled (trust-all TrustManager / allow-all HostnameVerifier -> MITM).
+  metadata: {cwe: "CWE-295", category: tls, confidence: HIGH}
+  pattern-either:
+    - pattern: |
+        public void checkServerTrusted(...) {}
+    - pattern: |
+        public X509Certificate[] getAcceptedIssuers() { return null; }
+    - pattern: new NoopHostnameVerifier()
+    - pattern: SSLConnectionSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER
+    - pattern: |
+        public boolean verify(String $H, SSLSession $S) { return true; }
+
+- id: ts-java-spring-security-misconfig
+  languages: [java]
+  severity: WARNING
+  message: Spring Security weakened (CSRF disabled, permitAll on broad paths, frame options disabled).
+  metadata: {cwe: "CWE-284", category: broken-access-control, confidence: LOW}
+  pattern-either:
+    - pattern: $H.csrf().disable()
+    - pattern: $H.csrf(csrf -> csrf.disable())
+    - pattern: $H.csrf(AbstractHttpConfigurer::disable)
+    - pattern: $X.antMatchers("/**").permitAll()
+    - pattern: $X.requestMatchers("/**").permitAll()
+    - pattern: $X.anyRequest().permitAll()
+    - pattern: $H.headers().frameOptions().disable()
+
+- id: ts-java-cookie-flags
+  languages: [java]
+  severity: INFO
+  message: Cookie created with Secure/HttpOnly disabled.
+  metadata: {cwe: "CWE-614", category: cookie, confidence: MEDIUM}
+  pattern-either:
+    - pattern: (Cookie $C).setSecure(false)
+    - pattern: (Cookie $C).setHttpOnly(false)
+
+- id: ts-java-hardcoded-secret
+  languages: [java]
+  severity: WARNING
+  message: Hardcoded credential/secret.
+  metadata: {cwe: "CWE-798", category: hardcoded-secret, confidence: LOW}
+  patterns:
+    - pattern: $TYPE $K = "$V";
+    - metavariable-regex: {metavariable: $K, regex: '(?i).*(password|passwd|secret|apikey|api_key|private_key|token|jwt_secret|signing_key).*'}
+    - metavariable-regex: {metavariable: $V, regex: '^.{8,}$'}
+    # not a PEM/armour header, a config-key name, a path, a URL, a message, or a SQL/format string
+    - metavariable-regex: {metavariable: $V, regex: '^(?!-----)(?!.*\s)(?!.*https?://)(?!.*\.(properties|json|xml|yml|pem|p12|jks)$)(?!/)(?!.*\{\})[^\s]+$'}
+    # reject values that look like identifiers/config keys rather than secrets:
+    # require at least one digit or a non-alphanumeric other than . _ -
+    - metavariable-regex: {metavariable: $V, regex: '^(?=.*[0-9]|.*[^A-Za-z0-9._\-]).+$'}
+
+- id: ts-java-actuator-exposed
+  languages: [generic]
+  paths: {include: ["*.properties", "*.yml", "*.yaml"]}
+  severity: WARNING
+  message: Spring Boot actuator endpoints exposed (heapdump/env/jolokia -> secrets & RCE).
+  metadata: {cwe: "CWE-200", category: info-disclosure, confidence: MEDIUM}
+  pattern-either:
+    - pattern: management.endpoints.web.exposure.include=*
+    - pattern: 'include: "*"'
+    - pattern: management.security.enabled=false
